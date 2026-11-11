@@ -25,7 +25,7 @@ public class ProotService extends Service {
     static final String CHANNEL_ID = "dsh-runtime";
     static final int NOTIF_ID = 1;
     static final int PORT = 3080;
-    static final String ROOTFS_URL = "https://github.com/<owner>/<repo>/releases/download/v1.0.0/rootfs-clean.tar.gz";
+    static final String ROOTFS_URL = "https://github.com/FantanG631/dsh-android/releases/download/v1.0.0/rootfs-clean.tar.gz";
     static final String ROOTFS_SHA256 = "40443af5a594243cb11a5156919478b0a0582312f5b54f1f9efc6fcfc3e1f41c";
 
     private volatile boolean running = true, tokenWatcherStarted = false;
