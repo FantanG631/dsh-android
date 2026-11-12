@@ -32,6 +32,9 @@ public class ProotService extends Service {
     private Process dsh;
     private File files, bin, rootfs, ptmp, l2s, shm;
     private long lastStart = 0;
+    private volatile boolean loopRunning = false;
+    static final String ACTION_RETRY = "com.dsh.phone.RETRY";
+    static final String ACTION_UPDATE = "com.dsh.phone.UPDATE";
     private PowerManager.WakeLock wakeLock;
 
     @Override public IBinder onBind(Intent i) { return null; }
@@ -51,7 +54,11 @@ public class ProotService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (dsh == null) new Thread(this::loop, "dsh-supervisor").start();
+        String action = intent == null ? null : intent.getAction();
+        if (ACTION_UPDATE.equals(action)) { updateRuntime(); return START_STICKY; }
+        boolean retry = ACTION_RETRY.equals(action);
+        if (retry) { dsh = null; loopRunning = false; }
+        if (dsh == null && !loopRunning) new Thread(this::loop, "dsh-supervisor").start();
         return START_STICKY;
     }
 
@@ -63,6 +70,7 @@ public class ProotService extends Service {
     }
 
     private void loop() {
+        loopRunning = true;
         try {
             files = getFilesDir();
             bin = new File(files, "bin");
@@ -74,20 +82,42 @@ public class ProotService extends Service {
             new File(rootfs, "sdcard").mkdirs();
             new File(rootfs, "storage/emulated/0").mkdirs();
             prepareAssets();
+            if (rootfsLooksReady()) {
+                setState("start", 100, "运行环境已就绪", null);
+            }
             if (!rootfsLooksReady()) {
+                setState("check", 0, "检查运行环境", null);
                 File local = new File("/sdcard/Download/DSH/rootfs.tar");
-                File pkg = local.exists() ? local : fetchRootfs();
-                if (pkg == null) { update("下载失败，稍后重试"); return; }
+                File pkg;
+                if (local.exists()) {
+                    setState("download", 100, "使用本地运行环境包", null);
+                    pkg = local;
+                } else {
+                    setState("download", 0, "开始下载运行环境", null);
+                    pkg = fetchRootfs();
+                }
+                if (pkg == null) { setState("error", 0, "下载失败", "下载失败，请检查网络后重试"); return; }
+                setState("verify", 100, "校验完整性", null);
+                setState("extract", -1, "正在解压（约 2.5 GB）", null);
                 update("正在解压 rootfs…");
                 extract(pkg);
             }
             startTokenWatcher();
             while (running) {
-                if (!healthy()) startDsh();
+                if (!healthy()) {
+                    setState(healthy() ? "ready" : (dsh == null ? "start" : "start"), healthy() ? 100 : -1,
+                            healthy() ? "DSH 已就绪" : "正在启动 DSH", null);
+                    startDsh();
+                } else {
+                    setState("ready", 100, "DSH 已就绪", null);
+                }
                 Thread.sleep(8000);
             }
         } catch (Throwable t) {
+            setState("error", 0, "服务异常", String.valueOf(t));
             update("服务异常：" + t);
+        } finally {
+            loopRunning = false;
         }
     }
 
@@ -136,7 +166,9 @@ public class ProotService extends Service {
                         if (now - lastNotif > 3000) {
                             lastNotif = now;
                             int pct = total > 0 ? (int) (done * 100 / total) : -1;
-                            update("下载中 " + (done >> 20) + "MB" + (total > 0 ? " / " + (total >> 20) + "MB（" + pct + "%）" : ""));
+                            String msg = "下载中 " + (done >> 20) + "MB" + (total > 0 ? " / " + (total >> 20) + "MB" : "");
+                            update(msg + (pct >= 0 ? "（" + pct + "%）" : ""));
+                            setState("download", pct, msg, null);
                         }
                     }
                 }
@@ -264,6 +296,67 @@ public class ProotService extends Service {
             }
             log("token captured: " + url.substring(0, Math.min(48, url.length())));
         } catch (Throwable t) { log("publishToken ERR " + t); }
+    }
+
+    /** 写状态文件，供界面轮询。phase: check/download/verify/extract/start/ready/error */
+    private void setState(String phase, int progress, String detail, String error) {
+        try {
+            String json = "{\"phase\":\"" + phase + "\",\"progress\":" + progress
+                    + ",\"detail\":\"" + (detail == null ? "" : detail.replace("\"", "'")) + "\",\"error\":"
+                    + (error == null ? "null" : "\"" + error.replace("\"", "'") + "\"") + "}";
+            File tmp = new File(files, "state.json.tmp");
+            try (FileOutputStream os = new FileOutputStream(tmp)) {
+                os.write(json.getBytes("UTF-8"));
+                os.getFD().sync();
+            }
+            File dst = new File(files, "state.json");
+            if (!tmp.renameTo(dst)) { dst.delete(); tmp.renameTo(dst); }
+        } catch (Throwable ignored) {}
+    }
+
+    /** 下载新运行环境 → 替换旧目录；失败自动回滚。 */
+    private void updateRuntime() {
+        new Thread(() -> {
+            File bak = new File(files, "rootfs.bak");
+            try {
+                setState("download", 0, "开始更新运行环境", null);
+                if (dsh != null) { dsh.destroy(); dsh = null; }
+                deleteRec(bak);
+                if (rootfs.exists() && !rootfs.renameTo(bak)) {
+                    setState("error", 0, "更新失败", "无法重命名旧目录");
+                    return;
+                }
+                rootfs.mkdirs();
+                File pkg = fetchRootfs();
+                if (pkg == null) { rollback(bak); setState("error", 0, "更新失败", "下载失败，已回滚"); return; }
+                setState("verify", 100, "校验完整性", null);
+                setState("extract", -1, "正在解压新版（约 2.5 GB）", null);
+                extract(pkg);
+                if (!rootfsLooksReady()) { rollback(bak); setState("error", 0, "更新失败", "解压不完整，已回滚"); return; }
+                deleteRec(bak);
+                setState("ready", 100, "运行环境已更新", null);
+                loopRunning = false;
+                if (dsh == null && !loopRunning) new Thread(this::loop, "dsh-supervisor").start();
+            } catch (Throwable t) {
+                rollback(bak);
+                setState("error", 0, "更新失败", String.valueOf(t));
+            }
+        }, "dsh-update").start();
+    }
+
+    private void rollback(File bak) {
+        try {
+            deleteRec(rootfs);
+            if (bak.exists()) bak.renameTo(rootfs);
+        } catch (Throwable ignored) {}
+    }
+
+    private void deleteRec(File f) {
+        try {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteRec(k);
+            f.delete();
+        } catch (Throwable ignored) {}
     }
 
     private void createChannel() {
