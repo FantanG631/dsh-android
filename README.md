@@ -10,6 +10,17 @@ MCP 工具、技能与预设；不绑定任何特定业务或聊天客户端。
 - 想自己构建：见 [docs/BUILD.md](docs/BUILD.md)，rootfs 可用 `scripts/build-rootfs.sh` 从零生成；
 - 想了解踩过的坑：[docs/DSH-on-Android-经验与教训.md](docs/DSH-on-Android-经验与教训.md)。
 
+## 版本
+
+| 版本 | 内容 | 说明 |
+| --- | --- | --- |
+| [**v1.0.2**](../../releases/tag/v1.0.2) | APK | **当前最新**，修复文件上传与 JS 弹窗，新增 `/sdcard` 挂载 |
+| [v1.0.0](../../releases/tag/v1.0.0) | APK + rootfs + 校验文件 | 首个公开版；运行环境 `rootfs-clean.tar.gz` **只在这里**，之后各版本复用 |
+
+- **升级**：直接用新版 APK 覆盖安装即可，签名不变、数据保留，无需重新下载运行环境；
+- **运行环境**只发布一次（v1.0.0），App 首次启动会自动按固定 SHA256 校验下载，
+  因此后续版本的 Release 页面里看不到它，属于预期行为。
+
 
 ## 能力
 
