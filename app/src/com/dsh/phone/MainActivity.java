@@ -1,6 +1,13 @@
 package com.dsh.phone;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
+import android.webkit.ValueCallback;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
+import android.widget.EditText;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -35,6 +42,8 @@ public class MainActivity extends Activity {
     TextView overlay;
     final Handler ui = new Handler(Looper.getMainLooper());
     volatile boolean serverReady = false;
+    static final int REQ_FILE = 1001;
+    ValueCallback<Uri[]> fileCallback;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -90,6 +99,43 @@ public class MainActivity extends Activity {
                 resultMsg.sendToTarget();
                 return true;
             }
+
+            @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = cb;
+                try {
+                    startActivityForResult(Intent.createChooser(params.createIntent(), "选择文件"), REQ_FILE);
+                } catch (Throwable t) {
+                    fileCallback = null;
+                    return false;
+                }
+                return true;
+            }
+
+            @Override public boolean onJsAlert(WebView v, String u, String m, final JsResult r) {
+                new AlertDialog.Builder(MainActivity.this).setMessage(m)
+                        .setPositiveButton(android.R.string.ok, (d, w) -> r.confirm())
+                        .setCancelable(false).show();
+                return true;
+            }
+
+            @Override public boolean onJsConfirm(WebView v, String u, String m, final JsResult r) {
+                new AlertDialog.Builder(MainActivity.this).setMessage(m)
+                        .setPositiveButton(android.R.string.ok, (d, w) -> r.confirm())
+                        .setNegativeButton(android.R.string.cancel, (d, w) -> r.cancel())
+                        .setCancelable(false).show();
+                return true;
+            }
+
+            @Override public boolean onJsPrompt(WebView v, String u, String m, String def, final JsPromptResult r) {
+                final EditText e = new EditText(MainActivity.this);
+                e.setText(def == null ? "" : def);
+                new AlertDialog.Builder(MainActivity.this).setMessage(m).setView(e)
+                        .setPositiveButton(android.R.string.ok, (d, w) -> r.confirm(e.getText().toString()))
+                        .setNegativeButton(android.R.string.cancel, (d, w) -> r.cancel())
+                        .setCancelable(false).show();
+                return true;
+            }
         });
 
         root.addView(web, new FrameLayout.LayoutParams(
@@ -104,8 +150,22 @@ public class MainActivity extends Activity {
         root.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        requestStoragePermission();
         requestBatteryExemption();
         waitForServer();
+    }
+
+    /** 申请存储权限：用于把手机存储挂进容器。 */
+    void requestStoragePermission() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 23
+                    && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1002);
+            }
+        } catch (Throwable ignored) {}
     }
 
     /** 申请忽略电池优化，避免熄屏后被 Doze 挂起。 */
@@ -175,6 +235,24 @@ public class MainActivity extends Activity {
 
     void show(String text) { overlay.setText(text); overlay.setVisibility(ViewGroup.VISIBLE); }
     void hide() { overlay.setVisibility(ViewGroup.GONE); }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == REQ_FILE && fileCallback != null) {
+            Uri[] out = null;
+            if (res == RESULT_OK && data != null) {
+                if (data.getClipData() != null) {
+                    int n = data.getClipData().getItemCount();
+                    out = new Uri[n];
+                    for (int i = 0; i < n; i++) out[i] = data.getClipData().getItemAt(i).getUri();
+                } else if (data.getData() != null) {
+                    out = new Uri[]{data.getData()};
+                }
+            }
+            fileCallback.onReceiveValue(out);
+            fileCallback = null;
+        }
+    }
 
     @Override public void onBackPressed() {
         if (web.canGoBack()) web.goBack(); else super.onBackPressed();

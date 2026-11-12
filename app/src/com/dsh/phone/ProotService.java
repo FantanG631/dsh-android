@@ -71,6 +71,8 @@ public class ProotService extends Service {
             l2s = new File(files, "l2s");
             shm = new File(files, "shm");
             bin.mkdirs(); ptmp.mkdirs(); l2s.mkdirs(); shm.mkdirs();
+            new File(rootfs, "sdcard").mkdirs();
+            new File(rootfs, "storage/emulated/0").mkdirs();
             prepareAssets();
             if (!rootfsLooksReady()) {
                 File local = new File("/sdcard/Download/DSH/rootfs.tar");
@@ -180,6 +182,9 @@ public class ProotService extends Service {
         cmd.add("-r"); cmd.add(rootfs.getAbsolutePath());
         cmd.add("-b"); cmd.add("/dev"); cmd.add("-b"); cmd.add("/proc"); cmd.add("-b"); cmd.add("/sys");
         cmd.add("-b"); cmd.add(shm.getAbsolutePath() + ":/dev/shm");
+        // 手机存储（targetSdk 28 + 读写权限 = 传统存储模型，可直接访问）
+        cmd.add("-b"); cmd.add("/storage/emulated/0:/sdcard");
+        cmd.add("-b"); cmd.add("/storage/emulated/0");
         cmd.add("-w"); cmd.add("/root");
         for (String c : guestCmd) cmd.add(c);
         ProcessBuilder pb = new ProcessBuilder(cmd);
