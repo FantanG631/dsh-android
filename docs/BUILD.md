@@ -107,3 +107,27 @@ tar cf /sdcard/Download/DSH/rootfs.tar \
 2. 电池优化白名单（App 会主动弹窗申请）；
 3. 厂商“自启动管理”里放行；
 4. 若系统清理后台较强，把 App 锁在最近任务里。
+
+## 七、升级 DSH（维护流程）
+
+rootfs 里对 `dsh-session-persistence-jsonl` 与 `dsh-attachment-local` 打过一处补丁：
+把其中的 `link()` 换成「失败回退 `copyFile`」，否则在 f2fs 上新建会话、保存附件会报
+`ENOENT ... session.v4.jsonl.zstd`。
+
+**只要在 rootfs 里执行过 `npm install -g @deepseek-ai/dsh` 或 `npm update`，补丁就会被覆盖，必须重跑：**
+
+```bash
+# 在 rootfs 内，root 身份
+bash scripts/dsh-patch-f2fs.sh
+```
+
+- 脚本是**幂等**的，重复执行只会打印「已打过补丁」；
+- 结束时会用 `node --check` 校验两个模块的语法；
+- 默认作用于 `/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai`，
+  也可传入自定义模块根目录作为第一个参数。
+
+已核实：发布的 `rootfs-clean.tar.gz`（SHA256 `40443af5…1f41c`）中，
+上述两个模块各含 `__linkOrCopy` 3 处，说明补丁已在发布环境内。
+
+如果选择重新打包 rootfs，应在 `scripts/build-rootfs.sh` 的步骤 `[3/6]`（安装 DSH）之后
+追加一次该脚本调用，然后重新上传资产并同步更新 `ProotService.ROOTFS_SHA256`。
